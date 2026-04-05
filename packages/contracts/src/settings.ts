@@ -7,6 +7,7 @@ import {
   CodexModelOptions,
   CopilotModelOptions,
   DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER,
+  OpenCodeModelOptions,
 } from "./model";
 import { ModelSelection } from "./orchestration";
 
@@ -79,6 +80,13 @@ export const CopilotSettings = Schema.Struct({
 });
 export type CopilotSettings = typeof CopilotSettings.Type;
 
+export const OpenCodeSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
+  binaryPath: makeBinaryPathSetting("opencode"),
+  customModels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(() => [])),
+});
+export type OpenCodeSettings = typeof OpenCodeSettings.Type;
+
 export const ObservabilitySettings = Schema.Struct({
   otlpTracesUrl: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
   otlpMetricsUrl: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
@@ -101,6 +109,7 @@ export const ServerSettings = Schema.Struct({
   providers: Schema.Struct({
     codex: CodexSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     copilot: CopilotSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -149,6 +158,11 @@ const CopilotModelOptionsPatch = Schema.Struct({
   fastMode: Schema.optionalKey(CopilotModelOptions.fields.fastMode),
 });
 
+const OpenCodeModelOptionsPatch = Schema.Struct({
+  reasoningEffort: Schema.optionalKey(OpenCodeModelOptions.fields.reasoningEffort),
+  fastMode: Schema.optionalKey(OpenCodeModelOptions.fields.fastMode),
+});
+
 const ModelSelectionPatch = Schema.Union([
   Schema.Struct({
     provider: Schema.optionalKey(Schema.Literal("codex")),
@@ -159,6 +173,11 @@ const ModelSelectionPatch = Schema.Union([
     provider: Schema.optionalKey(Schema.Literal("copilot")),
     model: Schema.optionalKey(TrimmedNonEmptyString),
     options: Schema.optionalKey(CopilotModelOptionsPatch),
+  }),
+  Schema.Struct({
+    provider: Schema.optionalKey(Schema.Literal("opencode")),
+    model: Schema.optionalKey(TrimmedNonEmptyString),
+    options: Schema.optionalKey(OpenCodeModelOptionsPatch),
   }),
   Schema.Struct({
     provider: Schema.optionalKey(Schema.Literal("claudeAgent")),
@@ -186,6 +205,12 @@ const CopilotSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const OpenCodeSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(Schema.String),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
@@ -200,6 +225,7 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({
       codex: Schema.optionalKey(CodexSettingsPatch),
       copilot: Schema.optionalKey(CopilotSettingsPatch),
+      opencode: Schema.optionalKey(OpenCodeSettingsPatch),
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
     }),
   ),
