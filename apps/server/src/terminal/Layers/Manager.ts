@@ -192,13 +192,28 @@ function normalizeShellCommand(value: string | undefined): string | null {
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
 
+  if (trimmed[0] === '"' || trimmed[0] === "'") {
+    const quote = trimmed[0];
+    const closingQuoteIndex = trimmed.indexOf(quote, 1);
+    if (closingQuoteIndex <= 1) return null;
+    return trimmed.slice(1, closingQuoteIndex).trim() || null;
+  }
+
   if (process.platform === "win32") {
-    return trimmed;
+    const lower = trimmed.toLowerCase();
+    for (const extension of [".exe", ".cmd", ".bat", ".com"]) {
+      const extensionIndex = lower.indexOf(extension);
+      if (extensionIndex < 0) continue;
+      const commandEnd = extensionIndex + extension.length;
+      const nextChar = trimmed[commandEnd];
+      if (nextChar === undefined || /\s/.test(nextChar)) {
+        return trimmed.slice(0, commandEnd).trim() || null;
+      }
+    }
   }
 
   const firstToken = trimmed.split(/\s+/g)[0]?.trim();
-  if (!firstToken) return null;
-  return firstToken.replace(/^['"]|['"]$/g, "");
+  return firstToken || null;
 }
 
 function shellCandidateFromCommand(command: string | null): ShellCandidate | null {

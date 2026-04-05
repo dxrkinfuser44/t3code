@@ -39,8 +39,17 @@ const makeRoutingTextGeneration = Effect.gen(function* () {
   const codex = yield* CodexTextGen;
   const claude = yield* ClaudeTextGen;
 
-  const route = (provider?: TextGenerationProvider): TextGenerationShape =>
-    provider === "claudeAgent" ? claude : codex;
+  const route = (provider?: TextGenerationProvider | "copilot"): TextGenerationShape => {
+    switch (provider) {
+      case "claudeAgent":
+        return claude;
+      case "copilot":
+      case "codex":
+      case undefined:
+        // Copilot is not wired for git text generation yet; route safely to Codex.
+        return codex;
+    }
+  };
 
   return {
     generateCommitMessage: (input) =>

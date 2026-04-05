@@ -22,7 +22,7 @@ import {
   Scope,
 } from "effect";
 import { TestClock } from "effect/testing";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 
 import type { TerminalManagerShape } from "../Services/Manager";
 import {
@@ -275,9 +275,6 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
       fs.makeDirectory(filePath, { recursive: true }),
     );
 
-  const chmod = (filePath: string, mode: number) =>
-    Effect.flatMap(Effect.service(FileSystem.FileSystem), (fs) => fs.chmod(filePath, mode));
-
   const pathExists = (filePath: string) =>
     Effect.flatMap(Effect.service(FileSystem.FileSystem), (fs) => fs.exists(filePath));
 
@@ -291,14 +288,25 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
 
   it.effect("preserves non-notFound cwd stat failures", () =>
     Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
       const { manager, baseDir } = yield* createManager();
       const blockedRoot = path.join(baseDir, "blocked-root");
       const blockedCwd = path.join(blockedRoot, "cwd");
       yield* makeDirectory(blockedCwd);
-      yield* chmod(blockedRoot, 0o000);
+
+      const originalStat: typeof fs.stat = fs.stat.bind(fs);
+      const statSpy = vi
+        .spyOn(fs, "stat")
+        .mockImplementation((...args: Parameters<typeof originalStat>) => {
+          const [cwd] = args;
+          if (cwd === blockedCwd) {
+            return Effect.fail({ reason: { _tag: "PermissionDenied" } } as never);
+          }
+          return originalStat(...args);
+        });
 
       const error = yield* Effect.flip(manager.open(openInput({ cwd: blockedCwd }))).pipe(
-        Effect.ensuring(chmod(blockedRoot, 0o755).pipe(Effect.ignore)),
+        Effect.ensuring(Effect.sync(() => statSpy.mockRestore())),
       );
 
       expect(error).toMatchObject({
@@ -833,10 +841,11 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
       expect(ptyAdapter.spawnInputs[0]?.shell).toBe("/definitely/missing-shell");
 
       if (process.platform === "win32") {
+        const fallbackShellNames = ptyAdapter.spawnInputs
+          .slice(1)
+          .map((input) => path.basename(input.shell).toLowerCase());
         expect(
-          ptyAdapter.spawnInputs.some(
-            (input) => input.shell === "cmd.exe" || input.shell === "powershell.exe",
-          ),
+          fallbackShellNames.some((name) => name === "cmd.exe" || name === "powershell.exe"),
         ).toBe(true);
       } else {
         expect(

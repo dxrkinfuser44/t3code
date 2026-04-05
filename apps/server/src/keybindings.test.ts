@@ -2,7 +2,8 @@ import { KeybindingCommand, KeybindingRule, KeybindingsConfig } from "@t3tools/c
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { assertFailure } from "@effect/vitest/utils";
-import { Effect, FileSystem, Layer, Logger, Path, Schema } from "effect";
+import { Effect, FileSystem, Layer, Logger, Path, PlatformError, Schema } from "effect";
+import { vi } from "vitest";
 import { ServerConfig } from "./config";
 
 import {
@@ -407,26 +408,42 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const { keybindingsConfigPath } = yield* ServerConfig;
-      const { dirname } = yield* Path.Path;
       yield* writeKeybindingsConfig(keybindingsConfigPath, [
         { key: "mod+j", command: "terminal.toggle" },
       ]);
-      yield* fs.chmod(dirname(keybindingsConfigPath), 0o500);
-
-      const result = yield* Effect.gen(function* () {
-        const keybindings = yield* Keybindings;
-        return yield* keybindings.upsertKeybindingRule({
-          key: "mod+shift+r",
-          command: "script.run-tests.run",
+      const originalWriteFileString: typeof fs.writeFileString = fs.writeFileString.bind(fs);
+      const writeFileStringSpy = vi
+        .spyOn(fs, "writeFileString")
+        .mockImplementation((...args: Parameters<typeof originalWriteFileString>) => {
+          const [targetPath] = args;
+          if (
+            typeof targetPath === "string" &&
+            targetPath.startsWith(`${keybindingsConfigPath}.`) &&
+            targetPath.endsWith(".tmp")
+          ) {
+            return Effect.fail(
+              new Error("EACCES: permission denied") as unknown as PlatformError.PlatformError,
+            );
+          }
+          return originalWriteFileString(...args);
         });
-      }).pipe(toDetailResult);
-      assertFailure(result, "failed to write keybindings config");
 
-      yield* fs.chmod(dirname(keybindingsConfigPath), 0o700);
+      try {
+        const result = yield* Effect.gen(function* () {
+          const keybindings = yield* Keybindings;
+          return yield* keybindings.upsertKeybindingRule({
+            key: "mod+shift+r",
+            command: "script.run-tests.run",
+          });
+        }).pipe(toDetailResult);
+        assertFailure(result, "failed to write keybindings config");
 
-      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
-      const persistedView = persisted.map(({ key, command }) => ({ key, command }));
-      assert.deepEqual(persistedView, [{ key: "mod+j", command: "terminal.toggle" }]);
+        const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+        const persistedView = persisted.map(({ key, command }) => ({ key, command }));
+        assert.deepEqual(persistedView, [{ key: "mod+j", command: "terminal.toggle" }]);
+      } finally {
+        writeFileStringSpy.mockRestore();
+      }
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 

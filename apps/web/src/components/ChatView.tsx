@@ -1405,6 +1405,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const modelOptionsByProvider = useMemo(
     () => ({
       codex: providerStatuses.find((provider) => provider.provider === "codex")?.models ?? [],
+      copilot: providerStatuses.find((provider) => provider.provider === "copilot")?.models ?? [],
       claudeAgent:
         providerStatuses.find((provider) => provider.provider === "claudeAgent")?.models ?? [],
     }),

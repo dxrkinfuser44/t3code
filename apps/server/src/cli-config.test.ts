@@ -1,3 +1,4 @@
+import * as NFS from "node:fs";
 import os from "node:os";
 
 import { assert, expect, it } from "@effect/vitest";
@@ -5,10 +6,36 @@ import { ConfigProvider, Effect, FileSystem, Layer, Option, Path } from "effect"
 
 import { NetService } from "@t3tools/shared/Net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { resolveFdPath } from "./bootstrap";
 import { deriveServerPaths } from "./config";
 import { resolveServerConfig } from "./cli";
 
 it.layer(NodeServices.layer)("cli config resolution", (it) => {
+  const bootstrapFdPathDuplicationErrorCodes = new Set(["ENXIO", "EINVAL", "EPERM"]);
+
+  const resolveBootstrapFdOwner = Effect.fn(function* (fd: number) {
+    const fdPath = resolveFdPath(fd);
+    if (fdPath === undefined) return "reader" as const;
+
+    return yield* Effect.sync(() => {
+      let probeFd: number | undefined;
+      try {
+        probeFd = NFS.openSync(fdPath, "r");
+        return "caller" as const;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== undefined && bootstrapFdPathDuplicationErrorCodes.has(code)) {
+          return "reader" as const;
+        }
+        throw error;
+      } finally {
+        if (probeFd !== undefined) {
+          NFS.closeSync(probeFd);
+        }
+      }
+    });
+  });
+
   const defaultObservabilityConfig = {
     traceMinLevel: "Info",
     traceTimingEnabled: true,
@@ -25,7 +52,15 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     const fs = yield* FileSystem.FileSystem;
     const filePath = yield* fs.makeTempFileScoped({ prefix: "t3-bootstrap-", suffix: ".ndjson" });
     yield* fs.writeFileString(filePath, `${JSON.stringify(payload)}\n`);
-    const { fd } = yield* fs.open(filePath, { flag: "r" });
+    const fd = yield* Effect.sync(() => NFS.openSync(filePath, "r"));
+    const fdOwner = yield* resolveBootstrapFdOwner(fd);
+    if (fdOwner === "caller") {
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NFS.closeSync(fd);
+        }),
+      );
+    }
     return fd;
   });
 
@@ -158,7 +193,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
   it.effect("uses bootstrap envelope values as fallbacks when flags and env are absent", () =>
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
-      const baseDir = "/tmp/t3-bootstrap-home";
+      const baseDir = join(os.tmpdir(), "t3-bootstrap-home");
       const fd = yield* openBootstrapFd({
         mode: "desktop",
         port: 4888,

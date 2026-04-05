@@ -69,10 +69,10 @@ function getProviderStateFromCapabilities(
   const promptEffort = resolveEffort(caps, rawEffort) ?? null;
 
   // Normalize options for dispatch
-  const normalizedOptions =
-    provider === "codex"
-      ? normalizeCodexModelOptionsWithCapabilities(caps, providerOptions)
-      : normalizeClaudeModelOptionsWithCapabilities(caps, providerOptions);
+  const isReasoningEffortProvider = provider === "codex" || provider === "copilot";
+  const normalizedOptions = isReasoningEffortProvider
+    ? normalizeCodexModelOptionsWithCapabilities(caps, providerOptions)
+    : normalizeClaudeModelOptionsWithCapabilities(caps, providerOptions);
 
   // Ultrathink styling (driven by capabilities data, not provider identity)
   const ultrathinkActive =
@@ -114,6 +114,38 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     renderTraitsPicker: ({ threadId, model, models, modelOptions, prompt, onPromptChange }) => (
       <TraitsPicker
         provider="codex"
+        models={models}
+        threadId={threadId}
+        model={model}
+        modelOptions={modelOptions}
+        prompt={prompt}
+        onPromptChange={onPromptChange}
+      />
+    ),
+  },
+  copilot: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: ({
+      threadId,
+      model,
+      models,
+      modelOptions,
+      prompt,
+      onPromptChange,
+    }) => (
+      <TraitsMenuContent
+        provider="copilot"
+        models={models}
+        threadId={threadId}
+        model={model}
+        modelOptions={modelOptions}
+        prompt={prompt}
+        onPromptChange={onPromptChange}
+      />
+    ),
+    renderTraitsPicker: ({ threadId, model, models, modelOptions, prompt, onPromptChange }) => (
+      <TraitsPicker
+        provider="copilot"
         models={models}
         threadId={threadId}
         model={model}

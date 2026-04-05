@@ -1,50 +1,19 @@
 import { MessageId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-function matchMedia() {
-  return {
-    matches: false,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  };
-}
+vi.mock("../../hooks/useTheme", () => ({
+  useTheme: () => ({
+    theme: "light" as const,
+    resolvedTheme: "light" as const,
+    setTheme: () => {},
+  }),
+}));
 
-beforeAll(() => {
-  const classList = {
-    add: () => {},
-    remove: () => {},
-    toggle: () => {},
-    contains: () => false,
-  };
-
-  vi.stubGlobal("localStorage", {
-    getItem: () => null,
-    setItem: () => {},
-    removeItem: () => {},
-    clear: () => {},
-  });
-  vi.stubGlobal("window", {
-    matchMedia,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    desktopBridge: undefined,
-  });
-  vi.stubGlobal("document", {
-    documentElement: {
-      classList,
-      offsetHeight: 0,
-    },
-  });
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    callback(0);
-    return 0;
-  });
-});
+import { MessagesTimeline } from "./MessagesTimeline";
 
 describe("MessagesTimeline", () => {
-  it("renders inline terminal labels with the composer chip UI", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
+  it("renders inline terminal labels with the composer chip UI", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
@@ -93,12 +62,11 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Terminal 1 lines 1-5");
-    expect(markup).toContain("lucide-terminal");
+    expect(markup).toMatch(/<svg[^>]*>[\s\S]*?<\/svg><span[^>]*>Terminal 1 lines 1-5<\/span>/);
     expect(markup).toContain("yoo what&#x27;s ");
   });
 
-  it("renders context compaction entries in the normal work log", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
+  it("renders context compaction entries in the normal work log", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages

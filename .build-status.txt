@@ -1,0 +1,2 @@
+BUILD_CMD=npx bun run build
+BUILD_EXIT=0

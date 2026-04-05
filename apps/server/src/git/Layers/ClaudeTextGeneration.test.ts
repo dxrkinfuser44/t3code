@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { delimiter as PATH_DELIMITER } from "node:path";
 import { it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path } from "effect";
 import { expect } from "vitest";
@@ -24,40 +25,67 @@ function makeFakeClaudeBinary(dir: string) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const binDir = path.join(dir, "bin");
-    const claudePath = path.join(binDir, "claude");
+    const shimPath = path.join(binDir, "claude-shim.cjs");
     yield* fs.makeDirectory(binDir, { recursive: true });
 
     yield* fs.writeFileString(
-      claudePath,
+      shimPath,
       [
-        "#!/bin/sh",
-        'args="$*"',
-        'stdin_content="$(cat)"',
-        'if [ -n "$T3_FAKE_CLAUDE_ARGS_MUST_CONTAIN" ]; then',
-        '  printf "%s" "$args" | grep -F -- "$T3_FAKE_CLAUDE_ARGS_MUST_CONTAIN" >/dev/null || {',
-        '    printf "%s\\n" "args missing expected content" >&2',
-        "    exit 2",
+        'const fs = require("node:fs");',
+        'const args = process.argv.slice(2).join(" ");',
+        'const normalizeForMatch = (value) => String(value).replaceAll("\\\"", "").replace(/\\s+/g, " ").trim();',
+        "const normalizedArgs = normalizeForMatch(args);",
+        'const stdinContent = fs.readFileSync(0, "utf8");',
+        "",
+        "if (process.env.T3_FAKE_CLAUDE_ARGS_MUST_CONTAIN) {",
+        "  const required = normalizeForMatch(process.env.T3_FAKE_CLAUDE_ARGS_MUST_CONTAIN);",
+        "  if (!normalizedArgs.includes(required)) {",
+        '    process.stderr.write("args missing expected content\\n");',
+        "    process.exit(2);",
         "  }",
-        "fi",
-        'if [ -n "$T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN" ]; then',
-        '  if printf "%s" "$args" | grep -F -- "$T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN" >/dev/null; then',
-        '    printf "%s\\n" "args contained forbidden content" >&2',
-        "    exit 3",
-        "  fi",
-        "fi",
-        'if [ -n "$T3_FAKE_CLAUDE_STDIN_MUST_CONTAIN" ]; then',
-        '  printf "%s" "$stdin_content" | grep -F -- "$T3_FAKE_CLAUDE_STDIN_MUST_CONTAIN" >/dev/null || {',
-        '    printf "%s\\n" "stdin missing expected content" >&2',
-        "    exit 4",
+        "}",
+        "",
+        "if (process.env.T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN) {",
+        "  const forbidden = normalizeForMatch(process.env.T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN);",
+        "  if (normalizedArgs.includes(forbidden)) {",
+        '    process.stderr.write("args contained forbidden content\\n");',
+        "    process.exit(3);",
         "  }",
-        "fi",
-        'if [ -n "$T3_FAKE_CLAUDE_STDERR" ]; then',
-        '  printf "%s\\n" "$T3_FAKE_CLAUDE_STDERR" >&2',
-        "fi",
-        'printf "%s" "$T3_FAKE_CLAUDE_OUTPUT"',
-        'exit "${T3_FAKE_CLAUDE_EXIT_CODE:-0}"',
+        "}",
+        "",
+        "if (process.env.T3_FAKE_CLAUDE_STDIN_MUST_CONTAIN) {",
+        "  if (!stdinContent.includes(process.env.T3_FAKE_CLAUDE_STDIN_MUST_CONTAIN)) {",
+        '    process.stderr.write("stdin missing expected content\\n");',
+        "    process.exit(4);",
+        "  }",
+        "}",
+        "",
+        "if (process.env.T3_FAKE_CLAUDE_STDERR !== undefined) {",
+        "  process.stderr.write(`${process.env.T3_FAKE_CLAUDE_STDERR}\\n`);",
+        "}",
+        "",
+        "if (process.env.T3_FAKE_CLAUDE_OUTPUT !== undefined) {",
+        "  process.stdout.write(process.env.T3_FAKE_CLAUDE_OUTPUT);",
+        "}",
+        "",
+        "process.exit(Number(process.env.T3_FAKE_CLAUDE_EXIT_CODE ?? 0));",
         "",
       ].join("\n"),
+    );
+
+    if (process.platform === "win32") {
+      const claudeCmdPath = path.join(binDir, "claude.cmd");
+      yield* fs.writeFileString(
+        claudeCmdPath,
+        ["@echo off", 'node "%~dp0claude-shim.cjs" %*', ""].join("\r\n"),
+      );
+      return binDir;
+    }
+
+    const claudePath = path.join(binDir, "claude");
+    yield* fs.writeFileString(
+      claudePath,
+      ["#!/bin/sh", 'node "$(dirname "$0")/claude-shim.cjs" "$@"', ""].join("\n"),
     );
     yield* fs.chmod(claudePath, 0o755);
     return binDir;
@@ -89,7 +117,10 @@ function withFakeClaudeEnv<A, E, R>(
       const previousStdinMustContain = process.env.T3_FAKE_CLAUDE_STDIN_MUST_CONTAIN;
 
       yield* Effect.sync(() => {
-        process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+        process.env.PATH =
+          previousPath && previousPath.length > 0
+            ? `${binDir}${PATH_DELIMITER}${previousPath}`
+            : binDir;
         process.env.T3_FAKE_CLAUDE_OUTPUT = input.output;
 
         if (input.exitCode !== undefined) {

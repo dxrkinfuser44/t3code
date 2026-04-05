@@ -1,0 +1,2 @@
+CMD=npx bun run typecheck
+EXIT=0

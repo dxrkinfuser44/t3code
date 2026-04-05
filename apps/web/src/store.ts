@@ -81,7 +81,7 @@ function updateProject(
   return changed ? next : projects;
 }
 
-function normalizeModelSelection<T extends { provider: "codex" | "claudeAgent"; model: string }>(
+function normalizeModelSelection<T extends { provider: ProviderKind; model: string }>(
   selection: T,
 ): T {
   return {
@@ -494,7 +494,7 @@ function toLegacySessionStatus(
 }
 
 function toLegacyProvider(providerName: string | null): ProviderKind {
-  if (providerName === "codex" || providerName === "claudeAgent") {
+  if (providerName === "codex" || providerName === "copilot" || providerName === "claudeAgent") {
     return providerName;
   }
   return "codex";

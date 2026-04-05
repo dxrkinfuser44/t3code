@@ -46,6 +46,10 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function normalizeLineEndings(value: string): string {
+  return value.replace(/\r\n/g, "\n");
+}
+
 class IntegrationWaitTimeoutError extends Schema.TaggedErrorClass<IntegrationWaitTimeoutError>()(
   "IntegrationWaitTimeoutError",
   {
@@ -246,8 +250,14 @@ it.live("runs a single turn end-to-end and persists checkpoint state in sqlite +
       const ref1 = checkpointRefForThreadTurn(THREAD_ID, 1);
       assert.equal(gitRefExists(harness.workspaceDir, ref0), true);
       assert.equal(gitRefExists(harness.workspaceDir, ref1), true);
-      assert.equal(gitShowFileAtRef(harness.workspaceDir, ref0, "README.md"), "v1\n");
-      assert.equal(gitShowFileAtRef(harness.workspaceDir, ref1, "README.md"), "v1\n");
+      assert.equal(
+        normalizeLineEndings(gitShowFileAtRef(harness.workspaceDir, ref0, "README.md")),
+        "v1\n",
+      );
+      assert.equal(
+        normalizeLineEndings(gitShowFileAtRef(harness.workspaceDir, ref1, "README.md")),
+        "v1\n",
+      );
     }),
   ),
 );
@@ -509,18 +519,22 @@ it.live("runs multi-turn file edits and persists checkpoint diffs", () =>
       assert.equal(fullDiff.includes("README.md"), true);
 
       assert.equal(
-        gitShowFileAtRef(
-          harness.workspaceDir,
-          checkpointRefForThreadTurn(THREAD_ID, 1),
-          "README.md",
+        normalizeLineEndings(
+          gitShowFileAtRef(
+            harness.workspaceDir,
+            checkpointRefForThreadTurn(THREAD_ID, 1),
+            "README.md",
+          ),
         ),
         "v2\n",
       );
       assert.equal(
-        gitShowFileAtRef(
-          harness.workspaceDir,
-          checkpointRefForThreadTurn(THREAD_ID, 2),
-          "README.md",
+        normalizeLineEndings(
+          gitShowFileAtRef(
+            harness.workspaceDir,
+            checkpointRefForThreadTurn(THREAD_ID, 2),
+            "README.md",
+          ),
         ),
         "v3\n",
       );
@@ -851,7 +865,10 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
         ),
         true,
       );
-      assert.equal(fs.readFileSync(path.join(harness.workspaceDir, "README.md"), "utf8"), "v2\n");
+      assert.equal(
+        normalizeLineEndings(fs.readFileSync(path.join(harness.workspaceDir, "README.md"), "utf8")),
+        "v2\n",
+      );
       assert.equal(
         gitRefExists(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 2)),
         false,

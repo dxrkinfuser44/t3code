@@ -17,6 +17,8 @@ const makeTempDir = Effect.gen(function* () {
   });
 });
 
+const toPosixPath = (value: string) => value.replace(/\\/g, "/");
+
 const writeTextFile = Effect.fn("writeTextFile")(function* (
   cwd: string,
   relativePath: string,
@@ -56,7 +58,10 @@ it.layer(TestLayer)("ProjectFaviconResolverLive", (it) => {
         const resolved = yield* resolver.resolvePath(cwd);
 
         expect(resolved).not.toBeNull();
-        expect(resolved).toContain("public/brand/logo.svg");
+        if (resolved === null) {
+          return;
+        }
+        expect(toPosixPath(resolved)).toContain("public/brand/logo.svg");
       }),
     );
 

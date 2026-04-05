@@ -1,0 +1,2 @@
+CMD=npx bun run lint
+EXIT=0
