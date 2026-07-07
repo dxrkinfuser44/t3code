@@ -1,16 +1,37 @@
-import { describe, expect, it } from "vitest";
-import { buildLegacyClientSettingsMigrationPatch } from "./useSettings";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ProviderDriverKind,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
+import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
+import { describe, expect, it } from "vite-plus/test";
 
-describe("buildLegacyClientSettingsMigrationPatch", () => {
-  it("migrates archive confirmation from legacy local settings", () => {
-    expect(
-      buildLegacyClientSettingsMigrationPatch({
-        confirmThreadArchive: true,
-        confirmThreadDelete: false,
-      }),
-    ).toEqual({
-      confirmThreadArchive: true,
-      confirmThreadDelete: false,
-    });
+import { mergeEnvironmentSettings } from "./useSettings";
+
+describe("mergeEnvironmentSettings", () => {
+  it("combines the selected environment's server settings with client preferences", () => {
+    const serverSettings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        [ProviderInstanceId.make("codex_remote")]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+        },
+      },
+    };
+    const clientSettings = {
+      ...DEFAULT_CLIENT_SETTINGS,
+      favorites: [
+        {
+          provider: ProviderInstanceId.make("codex_remote"),
+          model: "gpt-5.4",
+        },
+      ],
+    };
+
+    const settings = mergeEnvironmentSettings(serverSettings, clientSettings);
+
+    expect(settings.providerInstances).toBe(serverSettings.providerInstances);
+    expect(settings.favorites).toBe(clientSettings.favorites);
   });
 });

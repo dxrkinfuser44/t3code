@@ -1,55 +1,73 @@
-import { Outlet, createFileRoute } from "@tanstack/react-router";
+import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
+import { useAtomValue } from "@effect/atom-react";
 import { useEffect } from "react";
 
+import { isCommandPaletteOpen } from "../commandPaletteContext";
+import { dispatchPreviewAction } from "../components/preview/previewActionBus";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import {
+  startNewLocalThreadFromContext,
+  startNewThreadFromContext,
+} from "../lib/chatThreadActions";
+import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { resolveShortcutCommand } from "../keybindings";
-import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
+import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
+import { isPreviewSupportedInRuntime } from "../previewStateStore";
+import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
-import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
-import { useSettings } from "~/hooks/useSettings";
-import { useServerKeybindings } from "~/rpc/serverState";
+import { stackedThreadToast, toastManager } from "~/components/ui/toast";
+import { primaryServerKeybindingsAtom } from "~/state/server";
 
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
-  const selectedThreadIdsSize = useThreadSelectionStore((state) => state.selectedThreadIds.size);
-  const { activeDraftThread, activeThread, defaultProjectId, handleNewThread, routeThreadId } =
+  const selectedThreadKeysSize = useThreadSelectionStore((state) => state.selectedThreadKeys.size);
+  const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
-  const keybindings = useServerKeybindings();
-  const terminalOpen = useTerminalStateStore((state) =>
-    routeThreadId
-      ? selectThreadTerminalState(state.terminalStateByThreadId, routeThreadId).terminalOpen
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const terminalOpen = useTerminalUiStateStore((state) =>
+    routeThreadRef
+      ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
       : false,
   );
-  const appSettings = useSettings();
-
+  // The `previewOpen` shortcut-context flag here uses the store-only value;
+  // the URL-aware arbitration lives inside ChatView's `onTogglePreview`,
+  // which we invoke via the action bus to avoid duplicating the rule.
+  const previewOpen = useRightPanelStore((state) =>
+    routeThreadRef
+      ? selectActiveRightPanel(state.byThreadKey, routeThreadRef) === "preview"
+      : false,
+  );
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: {
+          terminalFocus: isTerminalFocused(),
+          terminalOpen,
+          previewFocus: isPreviewFocused(),
+          previewOpen,
+        },
+      });
 
-      if (event.key === "Escape" && selectedThreadIdsSize > 0) {
+      if (isCommandPaletteOpen()) {
+        return;
+      }
+
+      if (event.key === "Escape" && selectedThreadKeysSize > 0) {
         event.preventDefault();
         clearSelection();
         return;
       }
 
-      const projectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? defaultProjectId;
-      if (!projectId) return;
-
-      const command = resolveShortcutCommand(event, keybindings, {
-        context: {
-          terminalFocus: isTerminalFocused(),
-          terminalOpen,
-        },
-      });
-
       if (command === "chat.newLocal") {
         event.preventDefault();
         event.stopPropagation();
-        void handleNewThread(projectId, {
-          envMode: resolveSidebarNewThreadEnvMode({
-            defaultEnvMode: appSettings.defaultThreadEnvMode,
-          }),
+        void startNewLocalThreadFromContext({
+          activeDraftThread,
+          activeThread: activeThread ?? undefined,
+          defaultProjectRef,
+          handleNewThread,
         });
         return;
       }
@@ -57,13 +75,56 @@ function ChatRouteGlobalShortcuts() {
       if (command === "chat.new") {
         event.preventDefault();
         event.stopPropagation();
-        void handleNewThread(projectId, {
-          branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
-          worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
-          envMode:
-            activeDraftThread?.envMode ?? (activeThread?.worktreePath ? "worktree" : "local"),
+        void startNewThreadFromContext({
+          activeDraftThread,
+          activeThread: activeThread ?? undefined,
+          defaultProjectRef,
+          handleNewThread,
         });
         return;
+      }
+
+      if (command === "preview.toggle") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!routeThreadRef) return;
+        if (!isPreviewSupportedInRuntime()) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "info",
+              title: "Preview is desktop-only",
+              description: "Open T3 Code in the desktop app to use the in-app preview.",
+            }),
+          );
+          return;
+        }
+        dispatchPreviewAction("toggle-panel");
+        return;
+      }
+
+      // The remaining preview commands only fire when the panel is the
+      // currently-focused tenant. The `when: previewFocus` rule already
+      // gates this, but defend against the keybinding being misconfigured.
+      if (
+        command === "preview.refresh" ||
+        command === "preview.focusUrl" ||
+        command === "preview.zoomIn" ||
+        command === "preview.zoomOut" ||
+        command === "preview.resetZoom"
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        const action =
+          command === "preview.refresh"
+            ? "refresh"
+            : command === "preview.focusUrl"
+              ? "focus-url"
+              : command === "preview.zoomIn"
+                ? "zoom-in"
+                : command === "preview.zoomOut"
+                  ? "zoom-out"
+                  : "reset-zoom";
+        dispatchPreviewAction(action);
       }
     };
 
@@ -77,10 +138,11 @@ function ChatRouteGlobalShortcuts() {
     clearSelection,
     handleNewThread,
     keybindings,
-    defaultProjectId,
-    selectedThreadIdsSize,
+    defaultProjectRef,
+    previewOpen,
+    routeThreadRef,
+    selectedThreadKeysSize,
     terminalOpen,
-    appSettings.defaultThreadEnvMode,
   ]);
 
   return null;
@@ -96,5 +158,13 @@ function ChatRouteLayout() {
 }
 
 export const Route = createFileRoute("/_chat")({
+  beforeLoad: async ({ context }) => {
+    if (
+      context.authGateState.status !== "authenticated" &&
+      context.authGateState.status !== "hosted-static"
+    ) {
+      throw redirect({ to: "/pair", replace: true });
+    }
+  },
   component: ChatRouteLayout,
 });

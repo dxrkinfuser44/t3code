@@ -1,0 +1,60 @@
+{
+  "cli": {
+    "version": ">= 18.4.0",
+    "appVersionSource": "remote",
+    "promptToConfigurePushNotifications": false
+  },
+  "build": {
+    "development": {
+      "corepack": true,
+      "env": {
+        "APP_VARIANT": "development"
+      },
+      "channel": "development",
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "corepack": true,
+      "env": {
+        "APP_VARIANT": "preview"
+      },
+      "channel": "preview",
+      "environment": "preview",
+      "distribution": "internal"
+    },
+    "preview:dev": {
+      "corepack": true,
+      "env": {
+        "APP_VARIANT": "preview",
+        "MOBILE_VERSION_POLICY": "fingerprint"
+      },
+      "channel": "preview",
+      "environment": "preview",
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "corepack": true,
+      "env": {
+        "APP_VARIANT": "production"
+      },
+      "channel": "production",
+      "environment": "production",
+      "autoIncrement": true
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "ascAppId": "6787819824"
+      },
+      "android": {
+        "track": "internal"
+      }
+    }
+  }
+}

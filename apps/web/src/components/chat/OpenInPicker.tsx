@@ -1,4 +1,4 @@
-import { EditorId, type ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import { EditorId, type EnvironmentId, type ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { memo, useCallback, useEffect, useMemo } from "react";
 import { isOpenFavoriteEditorShortcut, shortcutLabelForCommand } from "../../keybindings";
 import { usePreferredEditor } from "../../editorPreferences";
@@ -10,13 +10,30 @@ import {
   AntigravityIcon,
   CursorIcon,
   Icon,
+  KiroIcon,
   TraeIcon,
-  IntelliJIdeaIcon,
   VisualStudioCode,
+  VisualStudioCodeInsiders,
+  VSCodium,
   Zed,
 } from "../Icons";
+import {
+  AquaIcon,
+  CLionIcon,
+  DataGripIcon,
+  DataSpellIcon,
+  GoLandIcon,
+  IntelliJIdeaIcon,
+  PhpStormIcon,
+  PyCharmIcon,
+  RiderIcon,
+  RubyMineIcon,
+  RustRoverIcon,
+  WebStormIcon,
+} from "../JetBrainsIcons";
 import { isMacPlatform, isWindowsPlatform } from "~/lib/utils";
-import { readNativeApi } from "~/nativeApi";
+import { shellEnvironment } from "~/state/shell";
+import { useAtomCommand } from "~/state/use-atom-command";
 
 const resolveOptions = (platform: string, availableEditors: ReadonlyArray<EditorId>) => {
   const baseOptions: ReadonlyArray<{ label: string; Icon: Icon; value: EditorId }> = [
@@ -31,18 +48,23 @@ const resolveOptions = (platform: string, availableEditors: ReadonlyArray<Editor
       value: "trae",
     },
     {
+      label: "Kiro",
+      Icon: KiroIcon,
+      value: "kiro",
+    },
+    {
       label: "VS Code",
       Icon: VisualStudioCode,
       value: "vscode",
     },
     {
       label: "VS Code Insiders",
-      Icon: VisualStudioCode,
+      Icon: VisualStudioCodeInsiders,
       value: "vscode-insiders",
     },
     {
       label: "VSCodium",
-      Icon: VisualStudioCode,
+      Icon: VSCodium,
       value: "vscodium",
     },
     {
@@ -61,6 +83,61 @@ const resolveOptions = (platform: string, availableEditors: ReadonlyArray<Editor
       value: "idea",
     },
     {
+      label: "Aqua",
+      Icon: AquaIcon,
+      value: "aqua",
+    },
+    {
+      label: "CLion",
+      Icon: CLionIcon,
+      value: "clion",
+    },
+    {
+      label: "DataGrip",
+      Icon: DataGripIcon,
+      value: "datagrip",
+    },
+    {
+      label: "DataSpell",
+      Icon: DataSpellIcon,
+      value: "dataspell",
+    },
+    {
+      label: "GoLand",
+      Icon: GoLandIcon,
+      value: "goland",
+    },
+    {
+      label: "PhpStorm",
+      Icon: PhpStormIcon,
+      value: "phpstorm",
+    },
+    {
+      label: "PyCharm",
+      Icon: PyCharmIcon,
+      value: "pycharm",
+    },
+    {
+      label: "Rider",
+      Icon: RiderIcon,
+      value: "rider",
+    },
+    {
+      label: "RubyMine",
+      Icon: RubyMineIcon,
+      value: "rubymine",
+    },
+    {
+      label: "RustRover",
+      Icon: RustRoverIcon,
+      value: "rustrover",
+    },
+    {
+      label: "WebStorm",
+      Icon: WebStormIcon,
+      value: "webstorm",
+    },
+    {
       label: isMacPlatform(platform)
         ? "Finder"
         : isWindowsPlatform(platform)
@@ -70,18 +147,26 @@ const resolveOptions = (platform: string, availableEditors: ReadonlyArray<Editor
       value: "file-manager",
     },
   ];
-  return baseOptions.filter((option) => availableEditors.includes(option.value));
+  const availableEditorSet = new Set(availableEditors);
+  return baseOptions.filter((option) => availableEditorSet.has(option.value));
 };
 
 export const OpenInPicker = memo(function OpenInPicker({
+  environmentId,
   keybindings,
   availableEditors,
   openInCwd,
+  compact = false,
+  enableShortcut = true,
 }: {
+  environmentId: EnvironmentId;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   openInCwd: string | null;
+  compact?: boolean;
+  enableShortcut?: boolean;
 }) {
+  const openInEditorMutation = useAtomCommand(shellEnvironment.openInEditor, "open in editor");
   const [preferredEditor, setPreferredEditor] = usePreferredEditor(availableEditors);
   const options = useMemo(
     () => resolveOptions(navigator.platform, availableEditors),
@@ -91,14 +176,20 @@ export const OpenInPicker = memo(function OpenInPicker({
 
   const openInEditor = useCallback(
     (editorId: EditorId | null) => {
-      const api = readNativeApi();
-      if (!api || !openInCwd) return;
+      if (!openInCwd) return;
       const editor = editorId ?? preferredEditor;
       if (!editor) return;
-      void api.shell.openInEditor(openInCwd, editor);
+      const result = openInEditorMutation({
+        environmentId,
+        input: {
+          cwd: openInCwd,
+          editor,
+        },
+      });
       setPreferredEditor(editor);
+      return result;
     },
-    [preferredEditor, openInCwd, setPreferredEditor],
+    [environmentId, openInCwd, openInEditorMutation, preferredEditor, setPreferredEditor],
   );
 
   const openFavoriteEditorShortcutLabel = useMemo(
@@ -107,35 +198,63 @@ export const OpenInPicker = memo(function OpenInPicker({
   );
 
   useEffect(() => {
+    if (!enableShortcut) return;
     const handler = (e: globalThis.KeyboardEvent) => {
-      const api = readNativeApi();
       if (!isOpenFavoriteEditorShortcut(e, keybindings)) return;
-      if (!api || !openInCwd) return;
+      if (!openInCwd) return;
       if (!preferredEditor) return;
 
       e.preventDefault();
-      void api.shell.openInEditor(openInCwd, preferredEditor);
+      void openInEditorMutation({
+        environmentId,
+        input: {
+          cwd: openInCwd,
+          editor: preferredEditor,
+        },
+      });
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [preferredEditor, keybindings, openInCwd]);
+  }, [
+    enableShortcut,
+    environmentId,
+    keybindings,
+    openInCwd,
+    openInEditorMutation,
+    preferredEditor,
+  ]);
 
   return (
-    <Group aria-label="Subscription actions">
+    <Group aria-label="Open in editor">
       <Button
+        aria-label={compact ? "Open file in preferred editor" : undefined}
         size="xs"
         variant="outline"
         disabled={!preferredEditor || !openInCwd}
         onClick={() => openInEditor(preferredEditor)}
       >
         {primaryOption?.Icon && <primaryOption.Icon aria-hidden="true" className="size-3.5" />}
-        <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
+        <span
+          className={
+            compact
+              ? "sr-only"
+              : "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5"
+          }
+        >
           Open
         </span>
       </Button>
-      <GroupSeparator className="hidden @3xl/header-actions:block" />
+      <GroupSeparator {...(!compact ? { className: "hidden @3xl/header-actions:block" } : {})} />
       <Menu>
-        <MenuTrigger render={<Button aria-label="Copy options" size="icon-xs" variant="outline" />}>
+        <MenuTrigger
+          render={
+            <Button
+              aria-label={compact ? "Choose editor" : "Copy options"}
+              size="icon-xs"
+              variant="outline"
+            />
+          }
+        >
           <ChevronDownIcon aria-hidden="true" className="size-4" />
         </MenuTrigger>
         <MenuPopup align="end">

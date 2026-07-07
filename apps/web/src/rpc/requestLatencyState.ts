@@ -1,10 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
+import { WS_METHODS } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
 import { appAtomRegistry } from "./atomRegistry";
 
-export const SLOW_RPC_ACK_THRESHOLD_MS = 2_500;
+export const SLOW_RPC_ACK_THRESHOLD_MS = 15_000;
 export const MAX_TRACKED_RPC_ACK_REQUESTS = 256;
+let slowRpcAckThresholdMs = SLOW_RPC_ACK_THRESHOLD_MS;
 
 export interface SlowRpcAckRequest {
   readonly requestId: string;
@@ -20,6 +22,7 @@ interface PendingRpcAckRequest {
 }
 
 const pendingRpcAckRequests = new Map<string, PendingRpcAckRequest>();
+const untrackedRpcAckTags = new Set<string>([WS_METHODS.previewAutomationConnect]);
 
 const slowRpcAckRequestsAtom = Atom.make<ReadonlyArray<SlowRpcAckRequest>>([]).pipe(
   Atom.keepAlive,
@@ -35,7 +38,7 @@ function getSlowRpcAckRequestsValue(): ReadonlyArray<SlowRpcAckRequest> {
 }
 
 function shouldTrackRpcAck(tag: string): boolean {
-  return !tag.startsWith("subscribe");
+  return !tag.includes("subscribe") && !untrackedRpcAckTags.has(tag);
 }
 
 export function getSlowRpcAckRequests(): ReadonlyArray<SlowRpcAckRequest> {
@@ -56,12 +59,12 @@ export function trackRpcRequestSent(requestId: string, tag: string): void {
     startedAt: new Date(startedAtMs).toISOString(),
     startedAtMs,
     tag,
-    thresholdMs: SLOW_RPC_ACK_THRESHOLD_MS,
+    thresholdMs: slowRpcAckThresholdMs,
   };
   const timeoutId = setTimeout(() => {
     pendingRpcAckRequests.delete(requestId);
     appendSlowRpcAckRequest(request);
-  }, SLOW_RPC_ACK_THRESHOLD_MS);
+  }, slowRpcAckThresholdMs);
 
   pendingRpcAckRequests.set(requestId, {
     request,
@@ -119,7 +122,12 @@ function evictOldestPendingRpcRequestIfNeeded(): void {
 }
 
 export function resetRequestLatencyStateForTests(): void {
+  slowRpcAckThresholdMs = SLOW_RPC_ACK_THRESHOLD_MS;
   clearAllTrackedRpcRequests();
+}
+
+export function setSlowRpcAckThresholdMsForTests(thresholdMs: number): void {
+  slowRpcAckThresholdMs = thresholdMs;
 }
 
 export function useSlowRpcAckRequests(): ReadonlyArray<SlowRpcAckRequest> {

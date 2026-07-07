@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createThreadJumpHintVisibilityController,
+  getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
   resolveAdjacentThreadId,
   getFallbackThreadIdAfterDelete,
@@ -9,24 +9,71 @@ import {
   getProjectSortTimestamp,
   hasUnseenCompletion,
   isContextMenuPointerDown,
+  isTrailingDoubleClick,
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
+  resolveSidebarStageBadgeLabel,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
-  sortThreadsForSidebar,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
-import { OrchestrationLatestTurn, ProjectId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  OrchestrationLatestTurn,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   type Project,
   type Thread,
 } from "../types";
+
+const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("resolveSidebarStageBadgeLabel", () => {
+  it("returns Nightly for nightly primary server versions", () => {
+    expect(
+      resolveSidebarStageBadgeLabel({
+        primaryServerVersion: "0.0.28-nightly.20260616.12",
+        fallbackStageLabel: "Alpha",
+      }),
+    ).toBe("Nightly");
+  });
+
+  it("returns the fallback label for stable primary server versions", () => {
+    expect(
+      resolveSidebarStageBadgeLabel({
+        primaryServerVersion: "0.0.27",
+        fallbackStageLabel: "Alpha",
+      }),
+    ).toBe("Alpha");
+  });
+
+  it("returns the fallback label when the primary server version is missing", () => {
+    expect(
+      resolveSidebarStageBadgeLabel({
+        primaryServerVersion: null,
+        fallbackStageLabel: "Dev",
+      }),
+    ).toBe("Dev");
+  });
+
+  it("returns the fallback label for malformed nightly prerelease versions", () => {
+    expect(
+      resolveSidebarStageBadgeLabel({
+        primaryServerVersion: "0.0.28-nightly.20260616",
+        fallbackStageLabel: "Alpha",
+      }),
+    ).toBe("Alpha");
+  });
+});
 
 function makeLatestTurn(overrides?: {
   completedAt?: string | null;
@@ -55,6 +102,20 @@ describe("hasUnseenCompletion", () => {
         session: null,
       }),
     ).toBe(true);
+  });
+
+  it("treats a missing client visit marker as read", () => {
+    expect(
+      hasUnseenCompletion({
+        hasActionableProposedPlan: false,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        interactionMode: "default",
+        latestTurn: makeLatestTurn(),
+        lastVisitedAt: undefined,
+        session: null,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -120,6 +181,20 @@ describe("createThreadJumpHintVisibilityController", () => {
   });
 });
 
+describe("getSidebarThreadIdsToPrewarm", () => {
+  it("returns only the first visible thread ids up to the prewarm limit", () => {
+    expect(getSidebarThreadIdsToPrewarm(["t1", "t2", "t3"], 2)).toEqual(["t1", "t2"]);
+  });
+
+  it("returns all visible thread ids when they fit within the limit", () => {
+    expect(getSidebarThreadIdsToPrewarm(["t1", "t2"], 10)).toEqual(["t1", "t2"]);
+  });
+
+  it("returns no thread ids when the limit is zero", () => {
+    expect(getSidebarThreadIdsToPrewarm(["t1", "t2"], 0)).toEqual([]);
+  });
+});
+
 describe("shouldClearThreadSelectionOnMouseDown", () => {
   it("preserves selection for thread items", () => {
     const child = {
@@ -148,6 +223,24 @@ describe("shouldClearThreadSelectionOnMouseDown", () => {
   });
 });
 
+describe("isTrailingDoubleClick", () => {
+  it("treats a single click as a normal activation", () => {
+    expect(isTrailingDoubleClick(1)).toBe(false);
+  });
+
+  it("treats synthetic/keyboard activations (detail 0) as a normal activation", () => {
+    expect(isTrailingDoubleClick(0)).toBe(false);
+  });
+
+  it("ignores the second click of a double-click so it does not navigate", () => {
+    expect(isTrailingDoubleClick(2)).toBe(true);
+  });
+
+  it("ignores further clicks of a triple-click", () => {
+    expect(isTrailingDoubleClick(3)).toBe(true);
+  });
+});
+
 describe("resolveSidebarNewThreadEnvMode", () => {
   it("uses the app default when the caller does not request a specific mode", () => {
     expect(
@@ -168,6 +261,29 @@ describe("resolveSidebarNewThreadEnvMode", () => {
 });
 
 describe("resolveSidebarNewThreadSeedContext", () => {
+  it("prefers the default worktree mode over active thread context", () => {
+    expect(
+      resolveSidebarNewThreadSeedContext({
+        projectId: "project-1",
+        defaultEnvMode: "worktree",
+        activeThread: {
+          projectId: "project-1",
+          branch: "feature/existing",
+          worktreePath: "/repo/.t3/worktrees/existing",
+        },
+        activeDraftThread: {
+          projectId: "project-1",
+          branch: "feature/draft",
+          worktreePath: "/repo/.t3/worktrees/draft",
+          envMode: "worktree",
+          startFromOrigin: true,
+        },
+      }),
+    ).toEqual({
+      envMode: "worktree",
+    });
+  });
+
   it("inherits the active server thread context when creating a new thread in the same project", () => {
     expect(
       resolveSidebarNewThreadSeedContext({
@@ -202,12 +318,14 @@ describe("resolveSidebarNewThreadSeedContext", () => {
           branch: "feature/new-draft",
           worktreePath: "/repo/worktree",
           envMode: "worktree",
+          startFromOrigin: true,
         },
       }),
     ).toEqual({
       branch: "feature/new-draft",
       worktreePath: "/repo/worktree",
       envMode: "worktree",
+      startFromOrigin: true,
     });
   });
 
@@ -233,42 +351,97 @@ describe("orderItemsByPreferredIds", () => {
   it("keeps preferred ids first, skips stale ids, and preserves the relative order of remaining items", () => {
     const ordered = orderItemsByPreferredIds({
       items: [
-        { id: ProjectId.makeUnsafe("project-1"), name: "One" },
-        { id: ProjectId.makeUnsafe("project-2"), name: "Two" },
-        { id: ProjectId.makeUnsafe("project-3"), name: "Three" },
+        { id: ProjectId.make("project-1"), name: "One" },
+        { id: ProjectId.make("project-2"), name: "Two" },
+        { id: ProjectId.make("project-3"), name: "Three" },
       ],
       preferredIds: [
-        ProjectId.makeUnsafe("project-3"),
-        ProjectId.makeUnsafe("project-missing"),
-        ProjectId.makeUnsafe("project-1"),
+        ProjectId.make("project-3"),
+        ProjectId.make("project-missing"),
+        ProjectId.make("project-1"),
       ],
       getId: (project) => project.id,
     });
 
     expect(ordered.map((project) => project.id)).toEqual([
-      ProjectId.makeUnsafe("project-3"),
-      ProjectId.makeUnsafe("project-1"),
-      ProjectId.makeUnsafe("project-2"),
+      ProjectId.make("project-3"),
+      ProjectId.make("project-1"),
+      ProjectId.make("project-2"),
     ]);
   });
 
   it("does not duplicate items when preferred ids repeat", () => {
     const ordered = orderItemsByPreferredIds({
       items: [
-        { id: ProjectId.makeUnsafe("project-1"), name: "One" },
-        { id: ProjectId.makeUnsafe("project-2"), name: "Two" },
+        { id: ProjectId.make("project-1"), name: "One" },
+        { id: ProjectId.make("project-2"), name: "Two" },
       ],
       preferredIds: [
-        ProjectId.makeUnsafe("project-2"),
-        ProjectId.makeUnsafe("project-1"),
-        ProjectId.makeUnsafe("project-2"),
+        ProjectId.make("project-2"),
+        ProjectId.make("project-1"),
+        ProjectId.make("project-2"),
       ],
       getId: (project) => project.id,
     });
 
     expect(ordered.map((project) => project.id)).toEqual([
-      ProjectId.makeUnsafe("project-2"),
-      ProjectId.makeUnsafe("project-1"),
+      ProjectId.make("project-2"),
+      ProjectId.make("project-1"),
+    ]);
+  });
+
+  it("honors projectOrder physical keys via getProjectOrderKey", async () => {
+    // Regression guard for #1904 / the regression introduced by #2055:
+    // `projectOrder` is populated with physical keys (envId + cwd-derived)
+    // by the store and by drag-end handlers. Readers must identify projects
+    // with the same key format, or manual sort silently snaps back.
+    const { getProjectOrderKey } = await import("../logicalProject");
+    const projects = [
+      {
+        environmentId: EnvironmentId.make("environment-local"),
+        id: ProjectId.make("id-alpha"),
+        workspaceRoot: "/work/alpha",
+      },
+      {
+        environmentId: EnvironmentId.make("environment-local"),
+        id: ProjectId.make("id-beta"),
+        workspaceRoot: "/work/beta",
+      },
+      {
+        environmentId: EnvironmentId.make("environment-local"),
+        id: ProjectId.make("id-gamma"),
+        workspaceRoot: "/work/gamma",
+      },
+    ];
+    const ordered = orderItemsByPreferredIds({
+      items: projects,
+      preferredIds: [getProjectOrderKey(projects[2]!), getProjectOrderKey(projects[0]!)],
+      getId: getProjectOrderKey,
+    });
+
+    expect(ordered.map((project) => project.workspaceRoot)).toEqual([
+      "/work/gamma",
+      "/work/alpha",
+      "/work/beta",
+    ]);
+  });
+
+  it("resolves legacy preference aliases without materializing project state", () => {
+    const ordered = orderItemsByPreferredIds({
+      items: [
+        { id: "physical-a", cwd: "/work/a" },
+        { id: "physical-b", cwd: "/work/b" },
+        { id: "physical-c", cwd: "/work/c" },
+      ],
+      preferredIds: ["legacy:/work/c", "legacy:/work/a"],
+      getId: (project) => project.id,
+      getPreferenceIds: (project) => [project.id, `legacy:${project.cwd}`],
+    });
+
+    expect(ordered.map((project) => project.id)).toEqual([
+      "physical-c",
+      "physical-a",
+      "physical-b",
     ]);
   });
 });
@@ -276,9 +449,9 @@ describe("orderItemsByPreferredIds", () => {
 describe("resolveAdjacentThreadId", () => {
   it("resolves adjacent thread ids in ordered sidebar traversal", () => {
     const threads = [
-      ThreadId.makeUnsafe("thread-1"),
-      ThreadId.makeUnsafe("thread-2"),
-      ThreadId.makeUnsafe("thread-3"),
+      ThreadId.make("thread-1"),
+      ThreadId.make("thread-2"),
+      ThreadId.make("thread-3"),
     ];
 
     expect(
@@ -325,21 +498,21 @@ describe("getVisibleSidebarThreadIds", () => {
       getVisibleSidebarThreadIds([
         {
           renderedThreadIds: [
-            ThreadId.makeUnsafe("thread-12"),
-            ThreadId.makeUnsafe("thread-11"),
-            ThreadId.makeUnsafe("thread-10"),
+            ThreadId.make("thread-12"),
+            ThreadId.make("thread-11"),
+            ThreadId.make("thread-10"),
           ],
         },
         {
-          renderedThreadIds: [ThreadId.makeUnsafe("thread-8"), ThreadId.makeUnsafe("thread-6")],
+          renderedThreadIds: [ThreadId.make("thread-8"), ThreadId.make("thread-6")],
         },
       ]),
     ).toEqual([
-      ThreadId.makeUnsafe("thread-12"),
-      ThreadId.makeUnsafe("thread-11"),
-      ThreadId.makeUnsafe("thread-10"),
-      ThreadId.makeUnsafe("thread-8"),
-      ThreadId.makeUnsafe("thread-6"),
+      ThreadId.make("thread-12"),
+      ThreadId.make("thread-11"),
+      ThreadId.make("thread-10"),
+      ThreadId.make("thread-8"),
+      ThreadId.make("thread-6"),
     ]);
   });
 
@@ -348,17 +521,14 @@ describe("getVisibleSidebarThreadIds", () => {
       getVisibleSidebarThreadIds([
         {
           shouldShowThreadPanel: false,
-          renderedThreadIds: [
-            ThreadId.makeUnsafe("thread-hidden-2"),
-            ThreadId.makeUnsafe("thread-hidden-1"),
-          ],
+          renderedThreadIds: [ThreadId.make("thread-hidden-2"), ThreadId.make("thread-hidden-1")],
         },
         {
           shouldShowThreadPanel: true,
-          renderedThreadIds: [ThreadId.makeUnsafe("thread-12"), ThreadId.makeUnsafe("thread-11")],
+          renderedThreadIds: [ThreadId.make("thread-12"), ThreadId.make("thread-11")],
         },
       ]),
-    ).toEqual([ThreadId.makeUnsafe("thread-12"), ThreadId.makeUnsafe("thread-11")]);
+    ).toEqual([ThreadId.make("thread-12"), ThreadId.make("thread-11")]);
   });
 });
 
@@ -403,11 +573,14 @@ describe("resolveThreadStatusPill", () => {
     latestTurn: null,
     lastVisitedAt: undefined,
     session: {
-      provider: "codex" as const,
+      threadId: ThreadId.make("thread-1"),
       status: "running" as const,
-      createdAt: "2026-03-09T10:00:00.000Z",
+      providerName: "Codex",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      runtimeMode: DEFAULT_RUNTIME_MODE,
+      activeTurnId: "turn-1" as never,
+      lastError: null,
       updatedAt: "2026-03-09T10:00:00.000Z",
-      orchestrationStatus: "running" as const,
     },
   };
 
@@ -452,14 +625,14 @@ describe("resolveThreadStatusPill", () => {
           session: {
             ...baseThread.session,
             status: "ready",
-            orchestrationStatus: "ready",
+            activeTurnId: null,
           },
         },
       }),
     ).toMatchObject({ label: "Plan Ready", pulse: false });
   });
 
-  it("does not show plan ready after the proposed plan was implemented elsewhere", () => {
+  it("does not manufacture completed state without a client visit marker", () => {
     expect(
       resolveThreadStatusPill({
         thread: {
@@ -468,11 +641,11 @@ describe("resolveThreadStatusPill", () => {
           session: {
             ...baseThread.session,
             status: "ready",
-            orchestrationStatus: "ready",
+            activeTurnId: null,
           },
         },
       }),
-    ).toMatchObject({ label: "Completed", pulse: false });
+    ).toBeNull();
   });
 
   it("shows completed when there is an unseen completion and no active blocker", () => {
@@ -486,7 +659,7 @@ describe("resolveThreadStatusPill", () => {
           session: {
             ...baseThread.session,
             status: "ready",
-            orchestrationStatus: "ready",
+            activeTurnId: null,
           },
         },
       }),
@@ -572,43 +745,41 @@ describe("getVisibleThreadsForProject", () => {
   it("includes the active thread even when it falls below the folded preview", () => {
     const threads = Array.from({ length: 8 }, (_, index) =>
       makeThread({
-        id: ThreadId.makeUnsafe(`thread-${index + 1}`),
+        id: ThreadId.make(`thread-${index + 1}`),
         title: `Thread ${index + 1}`,
       }),
     );
 
     const result = getVisibleThreadsForProject({
       threads,
-      activeThreadId: ThreadId.makeUnsafe("thread-8"),
+      activeThreadId: ThreadId.make("thread-8"),
       isThreadListExpanded: false,
       previewLimit: 6,
     });
 
     expect(result.hasHiddenThreads).toBe(true);
     expect(result.visibleThreads.map((thread) => thread.id)).toEqual([
-      ThreadId.makeUnsafe("thread-1"),
-      ThreadId.makeUnsafe("thread-2"),
-      ThreadId.makeUnsafe("thread-3"),
-      ThreadId.makeUnsafe("thread-4"),
-      ThreadId.makeUnsafe("thread-5"),
-      ThreadId.makeUnsafe("thread-6"),
-      ThreadId.makeUnsafe("thread-8"),
+      ThreadId.make("thread-1"),
+      ThreadId.make("thread-2"),
+      ThreadId.make("thread-3"),
+      ThreadId.make("thread-4"),
+      ThreadId.make("thread-5"),
+      ThreadId.make("thread-6"),
+      ThreadId.make("thread-8"),
     ]);
-    expect(result.hiddenThreads.map((thread) => thread.id)).toEqual([
-      ThreadId.makeUnsafe("thread-7"),
-    ]);
+    expect(result.hiddenThreads.map((thread) => thread.id)).toEqual([ThreadId.make("thread-7")]);
   });
 
   it("returns all threads when the list is expanded", () => {
     const threads = Array.from({ length: 8 }, (_, index) =>
       makeThread({
-        id: ThreadId.makeUnsafe(`thread-${index + 1}`),
+        id: ThreadId.make(`thread-${index + 1}`),
       }),
     );
 
     const result = getVisibleThreadsForProject({
       threads,
-      activeThreadId: ThreadId.makeUnsafe("thread-8"),
+      activeThreadId: ThreadId.make("thread-8"),
       isThreadListExpanded: true,
       previewLimit: 6,
     });
@@ -624,11 +795,13 @@ describe("getVisibleThreadsForProject", () => {
 function makeProject(overrides: Partial<Project> = {}): Project {
   const { defaultModelSelection, ...rest } = overrides;
   return {
-    id: ProjectId.makeUnsafe("project-1"),
-    name: "Project",
-    cwd: "/tmp/project",
+    id: ProjectId.make("project-1"),
+    environmentId: localEnvironmentId,
+    title: "Project",
+    workspaceRoot: "/tmp/project",
+    repositoryIdentity: null,
     defaultModelSelection: {
-      provider: "codex",
+      instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5.4",
       ...defaultModelSelection,
     },
@@ -641,12 +814,12 @@ function makeProject(overrides: Partial<Project> = {}): Project {
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
-    id: ThreadId.makeUnsafe("thread-1"),
-    codexThreadId: null,
-    projectId: ProjectId.makeUnsafe("project-1"),
+    id: ThreadId.make("thread-1"),
+    environmentId: localEnvironmentId,
+    projectId: ProjectId.make("project-1"),
     title: "Thread",
     modelSelection: {
-      provider: "codex",
+      instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5.4",
       ...overrides?.modelSelection,
     },
@@ -655,249 +828,120 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     session: null,
     messages: [],
     proposedPlans: [],
-    error: null,
     createdAt: "2026-03-09T10:00:00.000Z",
     archivedAt: null,
+    deletedAt: null,
     updatedAt: "2026-03-09T10:00:00.000Z",
     latestTurn: null,
     branch: null,
     worktreePath: null,
-    turnDiffSummaries: [],
+    checkpoints: [],
     activities: [],
     ...overrides,
   };
 }
-
-describe("sortThreadsForSidebar", () => {
-  it("sorts threads by the latest user message in recency mode", () => {
-    const sorted = sortThreadsForSidebar(
-      [
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-1"),
-          createdAt: "2026-03-09T10:00:00.000Z",
-          updatedAt: "2026-03-09T10:10:00.000Z",
-          messages: [
-            {
-              id: "message-1" as never,
-              role: "user",
-              text: "older",
-              createdAt: "2026-03-09T10:01:00.000Z",
-              streaming: false,
-              completedAt: "2026-03-09T10:01:00.000Z",
-            },
-          ],
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-2"),
-          createdAt: "2026-03-09T10:05:00.000Z",
-          updatedAt: "2026-03-09T10:05:00.000Z",
-          messages: [
-            {
-              id: "message-2" as never,
-              role: "user",
-              text: "newer",
-              createdAt: "2026-03-09T10:06:00.000Z",
-              streaming: false,
-              completedAt: "2026-03-09T10:06:00.000Z",
-            },
-          ],
-        }),
-      ],
-      "updated_at",
-    );
-
-    expect(sorted.map((thread) => thread.id)).toEqual([
-      ThreadId.makeUnsafe("thread-2"),
-      ThreadId.makeUnsafe("thread-1"),
-    ]);
-  });
-
-  it("falls back to thread timestamps when there is no user message", () => {
-    const sorted = sortThreadsForSidebar(
-      [
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-1"),
-          createdAt: "2026-03-09T10:00:00.000Z",
-          updatedAt: "2026-03-09T10:01:00.000Z",
-          messages: [
-            {
-              id: "message-1" as never,
-              role: "assistant",
-              text: "assistant only",
-              createdAt: "2026-03-09T10:02:00.000Z",
-              streaming: false,
-              completedAt: "2026-03-09T10:02:00.000Z",
-            },
-          ],
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-2"),
-          createdAt: "2026-03-09T10:05:00.000Z",
-          updatedAt: "2026-03-09T10:05:00.000Z",
-          messages: [],
-        }),
-      ],
-      "updated_at",
-    );
-
-    expect(sorted.map((thread) => thread.id)).toEqual([
-      ThreadId.makeUnsafe("thread-2"),
-      ThreadId.makeUnsafe("thread-1"),
-    ]);
-  });
-
-  it("falls back to id ordering when threads have no sortable timestamps", () => {
-    const sorted = sortThreadsForSidebar(
-      [
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-1"),
-          createdAt: "" as never,
-          updatedAt: undefined,
-          messages: [],
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-2"),
-          createdAt: "" as never,
-          updatedAt: undefined,
-          messages: [],
-        }),
-      ],
-      "updated_at",
-    );
-
-    expect(sorted.map((thread) => thread.id)).toEqual([
-      ThreadId.makeUnsafe("thread-2"),
-      ThreadId.makeUnsafe("thread-1"),
-    ]);
-  });
-
-  it("can sort threads by createdAt when configured", () => {
-    const sorted = sortThreadsForSidebar(
-      [
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-1"),
-          createdAt: "2026-03-09T10:05:00.000Z",
-          updatedAt: "2026-03-09T10:05:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-2"),
-          createdAt: "2026-03-09T10:00:00.000Z",
-          updatedAt: "2026-03-09T10:10:00.000Z",
-        }),
-      ],
-      "created_at",
-    );
-
-    expect(sorted.map((thread) => thread.id)).toEqual([
-      ThreadId.makeUnsafe("thread-1"),
-      ThreadId.makeUnsafe("thread-2"),
-    ]);
-  });
-});
 
 describe("getFallbackThreadIdAfterDelete", () => {
   it("returns the top remaining thread in the deleted thread's project sidebar order", () => {
     const fallbackThreadId = getFallbackThreadIdAfterDelete({
       threads: [
         makeThread({
-          id: ThreadId.makeUnsafe("thread-oldest"),
-          projectId: ProjectId.makeUnsafe("project-1"),
+          id: ThreadId.make("thread-oldest"),
+          projectId: ProjectId.make("project-1"),
           createdAt: "2026-03-09T10:00:00.000Z",
           messages: [],
         }),
         makeThread({
-          id: ThreadId.makeUnsafe("thread-active"),
-          projectId: ProjectId.makeUnsafe("project-1"),
+          id: ThreadId.make("thread-active"),
+          projectId: ProjectId.make("project-1"),
           createdAt: "2026-03-09T10:05:00.000Z",
           messages: [],
         }),
         makeThread({
-          id: ThreadId.makeUnsafe("thread-newest"),
-          projectId: ProjectId.makeUnsafe("project-1"),
+          id: ThreadId.make("thread-newest"),
+          projectId: ProjectId.make("project-1"),
           createdAt: "2026-03-09T10:10:00.000Z",
           messages: [],
         }),
         makeThread({
-          id: ThreadId.makeUnsafe("thread-other-project"),
-          projectId: ProjectId.makeUnsafe("project-2"),
+          id: ThreadId.make("thread-other-project"),
+          projectId: ProjectId.make("project-2"),
           createdAt: "2026-03-09T10:20:00.000Z",
           messages: [],
         }),
       ],
-      deletedThreadId: ThreadId.makeUnsafe("thread-active"),
+      deletedThreadId: ThreadId.make("thread-active"),
       sortOrder: "created_at",
     });
 
-    expect(fallbackThreadId).toBe(ThreadId.makeUnsafe("thread-newest"));
+    expect(fallbackThreadId).toBe(ThreadId.make("thread-newest"));
   });
 
   it("skips other threads being deleted in the same action", () => {
     const fallbackThreadId = getFallbackThreadIdAfterDelete({
       threads: [
         makeThread({
-          id: ThreadId.makeUnsafe("thread-active"),
-          projectId: ProjectId.makeUnsafe("project-1"),
+          id: ThreadId.make("thread-active"),
+          projectId: ProjectId.make("project-1"),
           createdAt: "2026-03-09T10:05:00.000Z",
           messages: [],
         }),
         makeThread({
-          id: ThreadId.makeUnsafe("thread-newest"),
-          projectId: ProjectId.makeUnsafe("project-1"),
+          id: ThreadId.make("thread-newest"),
+          projectId: ProjectId.make("project-1"),
           createdAt: "2026-03-09T10:10:00.000Z",
           messages: [],
         }),
         makeThread({
-          id: ThreadId.makeUnsafe("thread-next"),
-          projectId: ProjectId.makeUnsafe("project-1"),
+          id: ThreadId.make("thread-next"),
+          projectId: ProjectId.make("project-1"),
           createdAt: "2026-03-09T10:07:00.000Z",
           messages: [],
         }),
       ],
-      deletedThreadId: ThreadId.makeUnsafe("thread-active"),
-      deletedThreadIds: new Set([
-        ThreadId.makeUnsafe("thread-active"),
-        ThreadId.makeUnsafe("thread-newest"),
-      ]),
+      deletedThreadId: ThreadId.make("thread-active"),
+      deletedThreadIds: new Set([ThreadId.make("thread-active"), ThreadId.make("thread-newest")]),
       sortOrder: "created_at",
     });
 
-    expect(fallbackThreadId).toBe(ThreadId.makeUnsafe("thread-next"));
+    expect(fallbackThreadId).toBe(ThreadId.make("thread-next"));
   });
 });
-
 describe("sortProjectsForSidebar", () => {
   it("sorts projects by the most recent user message across their threads", () => {
     const projects = [
-      makeProject({ id: ProjectId.makeUnsafe("project-1"), name: "Older project" }),
-      makeProject({ id: ProjectId.makeUnsafe("project-2"), name: "Newer project" }),
+      makeProject({ id: ProjectId.make("project-1"), title: "Older project" }),
+      makeProject({ id: ProjectId.make("project-2"), title: "Newer project" }),
     ];
     const threads = [
       makeThread({
-        projectId: ProjectId.makeUnsafe("project-1"),
+        projectId: ProjectId.make("project-1"),
         updatedAt: "2026-03-09T10:20:00.000Z",
         messages: [
           {
             id: "message-1" as never,
             role: "user",
             text: "older project user message",
+            turnId: null,
             createdAt: "2026-03-09T10:01:00.000Z",
+            updatedAt: "2026-03-09T10:01:00.000Z",
             streaming: false,
-            completedAt: "2026-03-09T10:01:00.000Z",
           },
         ],
       }),
       makeThread({
-        id: ThreadId.makeUnsafe("thread-2"),
-        projectId: ProjectId.makeUnsafe("project-2"),
+        id: ThreadId.make("thread-2"),
+        projectId: ProjectId.make("project-2"),
         updatedAt: "2026-03-09T10:05:00.000Z",
         messages: [
           {
             id: "message-2" as never,
             role: "user",
             text: "newer project user message",
+            turnId: null,
             createdAt: "2026-03-09T10:05:00.000Z",
+            updatedAt: "2026-03-09T10:05:00.000Z",
             streaming: false,
-            completedAt: "2026-03-09T10:05:00.000Z",
           },
         ],
       }),
@@ -906,8 +950,8 @@ describe("sortProjectsForSidebar", () => {
     const sorted = sortProjectsForSidebar(projects, threads, "updated_at");
 
     expect(sorted.map((project) => project.id)).toEqual([
-      ProjectId.makeUnsafe("project-2"),
-      ProjectId.makeUnsafe("project-1"),
+      ProjectId.make("project-2"),
+      ProjectId.make("project-1"),
     ]);
   });
 
@@ -915,13 +959,13 @@ describe("sortProjectsForSidebar", () => {
     const sorted = sortProjectsForSidebar(
       [
         makeProject({
-          id: ProjectId.makeUnsafe("project-1"),
-          name: "Older project",
+          id: ProjectId.make("project-1"),
+          title: "Older project",
           updatedAt: "2026-03-09T10:01:00.000Z",
         }),
         makeProject({
-          id: ProjectId.makeUnsafe("project-2"),
-          name: "Newer project",
+          id: ProjectId.make("project-2"),
+          title: "Newer project",
           updatedAt: "2026-03-09T10:05:00.000Z",
         }),
       ],
@@ -930,8 +974,8 @@ describe("sortProjectsForSidebar", () => {
     );
 
     expect(sorted.map((project) => project.id)).toEqual([
-      ProjectId.makeUnsafe("project-2"),
-      ProjectId.makeUnsafe("project-1"),
+      ProjectId.make("project-2"),
+      ProjectId.make("project-1"),
     ]);
   });
 
@@ -939,16 +983,16 @@ describe("sortProjectsForSidebar", () => {
     const sorted = sortProjectsForSidebar(
       [
         makeProject({
-          id: ProjectId.makeUnsafe("project-2"),
-          name: "Beta",
-          createdAt: undefined,
-          updatedAt: undefined,
+          id: ProjectId.make("project-2"),
+          title: "Beta",
+          createdAt: "invalid-created-at" as never,
+          updatedAt: "invalid-updated-at" as never,
         }),
         makeProject({
-          id: ProjectId.makeUnsafe("project-1"),
-          name: "Alpha",
-          createdAt: undefined,
-          updatedAt: undefined,
+          id: ProjectId.make("project-1"),
+          title: "Alpha",
+          createdAt: "invalid-created-at" as never,
+          updatedAt: "invalid-updated-at" as never,
         }),
       ],
       [],
@@ -956,22 +1000,22 @@ describe("sortProjectsForSidebar", () => {
     );
 
     expect(sorted.map((project) => project.id)).toEqual([
-      ProjectId.makeUnsafe("project-1"),
-      ProjectId.makeUnsafe("project-2"),
+      ProjectId.make("project-1"),
+      ProjectId.make("project-2"),
     ]);
   });
 
   it("preserves manual project ordering", () => {
     const projects = [
-      makeProject({ id: ProjectId.makeUnsafe("project-2"), name: "Second" }),
-      makeProject({ id: ProjectId.makeUnsafe("project-1"), name: "First" }),
+      makeProject({ id: ProjectId.make("project-2"), title: "Second" }),
+      makeProject({ id: ProjectId.make("project-1"), title: "First" }),
     ];
 
     const sorted = sortProjectsForSidebar(projects, [], "manual");
 
     expect(sorted.map((project) => project.id)).toEqual([
-      ProjectId.makeUnsafe("project-2"),
-      ProjectId.makeUnsafe("project-1"),
+      ProjectId.make("project-2"),
+      ProjectId.make("project-1"),
     ]);
   });
 
@@ -979,26 +1023,26 @@ describe("sortProjectsForSidebar", () => {
     const sorted = sortProjectsForSidebar(
       [
         makeProject({
-          id: ProjectId.makeUnsafe("project-1"),
-          name: "Visible project",
+          id: ProjectId.make("project-1"),
+          title: "Visible project",
           updatedAt: "2026-03-09T10:01:00.000Z",
         }),
         makeProject({
-          id: ProjectId.makeUnsafe("project-2"),
-          name: "Archived-only project",
+          id: ProjectId.make("project-2"),
+          title: "Archived-only project",
           updatedAt: "2026-03-09T10:00:00.000Z",
         }),
       ],
       [
         makeThread({
-          id: ThreadId.makeUnsafe("thread-visible"),
-          projectId: ProjectId.makeUnsafe("project-1"),
+          id: ThreadId.make("thread-visible"),
+          projectId: ProjectId.make("project-1"),
           updatedAt: "2026-03-09T10:02:00.000Z",
           archivedAt: null,
         }),
         makeThread({
-          id: ThreadId.makeUnsafe("thread-archived"),
-          projectId: ProjectId.makeUnsafe("project-2"),
+          id: ThreadId.make("thread-archived"),
+          projectId: ProjectId.make("project-2"),
           updatedAt: "2026-03-09T10:10:00.000Z",
           archivedAt: "2026-03-09T10:11:00.000Z",
         }),
@@ -1007,8 +1051,8 @@ describe("sortProjectsForSidebar", () => {
     );
 
     expect(sorted.map((project) => project.id)).toEqual([
-      ProjectId.makeUnsafe("project-1"),
-      ProjectId.makeUnsafe("project-2"),
+      ProjectId.make("project-1"),
+      ProjectId.make("project-2"),
     ]);
   });
 
